@@ -1,0 +1,1 @@
+worker: python camera_bot.py
