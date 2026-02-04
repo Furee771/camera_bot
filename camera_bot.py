@@ -2,9 +2,14 @@ import logging
 import sqlite3
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
+import psycopg2
 import os
 from dotenv import load_dotenv
 load_dotenv()
+
+# На Heroku 
+DATABASE_URL = os.environ.get('DATABASE_URL') 
+conn = psycopg2.connect(DATABASE_URL, sslmode='require')
 
 # 1. LOGLARNI SOZLASH
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -17,7 +22,9 @@ CHANNEL_LINK = "https://t.me/cameraServiceBot1"
 
 # 2. BAZA BILAN ISHLASH
 def get_db_connection():
-    return sqlite3.connect('database.db', check_same_thread=False, timeout=10)
+    db_url = os.environ.get('DATABASE_URL')
+    conn = psycopg2.connect(db_url, sslmode='require')
+    return conn
 
 def init_db():
     with get_db_connection() as conn:
