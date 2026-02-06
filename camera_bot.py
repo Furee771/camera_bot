@@ -1,46 +1,46 @@
 import logging
-import sqlite3
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import psycopg2
 import os
 from dotenv import load_dotenv
-load_dotenv()
 
-# На Heroku 
-DATABASE_URL = os.environ.get('DATABASE_URL') 
-conn = psycopg2.connect(DATABASE_URL, sslmode='require')
+load_dotenv()
 
 # 1. LOGLARNI SOZLASH
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 # --- ASOSIY SOZLAMALAR ---
-TOKEN = os.environ.get("API_KEY")  
-ADMIN_IDS = [8503332430]  # Adminlarning Telegram IDlarini 
-CHANNEL_ID = -1003622395120 
+TOKEN = os.environ.get("API_KEY")
+ADMIN_IDS = [8503332430]  # Adminlarning Telegram IDlari
+CHANNEL_ID = -1003622395120
 CHANNEL_LINK = "https://t.me/cameraServiceBot1"
 
-# 2. BAZA BILAN ISHLASH
+# 2. BAZA BILAN ISHLASH (PostgreSQL / Supabase)
 def get_db_connection():
     db_url = os.environ.get('DATABASE_URL')
+    # sslmode='require' majburiy Heroku va Supabase uchun
     conn = psycopg2.connect(db_url, sslmode='require')
     return conn
 
 def init_db():
     with get_db_connection() as conn:
         cursor = conn.cursor()
+        # Postgresda AUTOINCREMENT o'rniga SERIAL ishlatiladi
         cursor.execute('''CREATE TABLE IF NOT EXISTS applications 
-                          (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, name TEXT, phone TEXT, description TEXT)''')
+                          (id SERIAL PRIMARY KEY, user_id BIGINT, name TEXT, phone TEXT, description TEXT)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS products 
-                          (id INTEGER PRIMARY KEY AUTOINCREMENT, category TEXT, name TEXT, price TEXT, photo_id TEXT)''')
+                          (id SERIAL PRIMARY KEY, category TEXT, name TEXT, price TEXT, photo_id TEXT)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS settings 
                           (key TEXT PRIMARY KEY, value TEXT)''')
         
-        # FIX: Matnni xavfsiz kiritish (apostrof xatosini oldini olish uchun ?, ? ishlatamiz)
+        # FIX: Postgresda INSERT OR IGNORE ishlamaydi, ON CONFLICT ishlatamiz
+        # FIX: Postgresda '?' o'rniga '%s' ishlatiladi
         info_text = "Bizning xizmatlar: Kamera o'rnatish, ta'mirlash va sozlash."
-        cursor.execute("INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)", ('info_text', info_text))
+        cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('info_text', info_text))
         conn.commit()
 
+# Bazani ishga tushirish
 init_db()
 
 # 3. STATES (HOLATLAR)
@@ -97,7 +97,7 @@ async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def share_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot = await context.bot.get_me()
-    await update.message.reply_text(f"Do'stlaringizga ulashing:\nhttps://t.me/cameraServiceBot?start=welcome")
+    await update.message.reply_text(f"Do'stlaringizga ulashing:\nhttps://t.me/{bot.username}?start=welcome")
 
 async def check_sub_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if await is_subscribed(update, context):
@@ -141,7 +141,8 @@ async def get_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loc = context.user_data.get('app_location')
     
     with get_db_connection() as conn:
-        conn.cursor().execute("INSERT INTO applications (user_id, name, phone, description) VALUES (?, ?, ?, ?)", 
+        # FIX: ? -> %s
+        conn.cursor().execute("INSERT INTO applications (user_id, name, phone, description) VALUES (%s, %s, %s, %s)", 
                              (update.effective_user.id, name, phone, f"{desc}\n📍 {loc}"))
         conn.commit()
         
@@ -200,7 +201,8 @@ async def start_edit_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_info_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "⬅️ Orqaga": return await admin_panel(update, context)
     with get_db_connection() as conn:
-        conn.cursor().execute("UPDATE settings SET value = ? WHERE key = 'info_text'", (update.message.text,))
+        # FIX: ? -> %s
+        conn.cursor().execute("UPDATE settings SET value = %s WHERE key = 'info_text'", (update.message.text,))
         conn.commit()
     await update.message.reply_text("✅ Ma'lumot yangilandi!")
     return await admin_panel(update, context)
@@ -252,8 +254,10 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     fid = update.message.photo[-1].file_id
     with get_db_connection() as conn:
-        conn.cursor().execute("INSERT INTO products (category, name, price, photo_id) VALUES (?, ?, ?, ?)", 
+        # FIX: ? -> %s
+        conn.cursor().execute("INSERT INTO products (category, name, price, photo_id) VALUES (%s, %s, %s, %s)", 
                              (context.user_data['p_cat'], context.user_data['p_name'], context.user_data['p_price'], fid))
+        conn.commit()
     await update.message.reply_text("✅ Tovar qo'shildi!")
     return await admin_panel(update, context)
 
@@ -285,13 +289,17 @@ async def start_rename_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def do_actual_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "⬅️ Orqaga": return await prepare_rename(update, context)
     with get_db_connection() as conn:
-        conn.cursor().execute("UPDATE products SET category = ? WHERE category = ?", (update.message.text, context.user_data['old_cat']))
+        # FIX: ? -> %s
+        conn.cursor().execute("UPDATE products SET category = %s WHERE category = %s", (update.message.text, context.user_data['old_cat']))
+        conn.commit()
     await update.message.reply_text("✅ Yangilandi!")
     return await admin_panel(update, context)
 
 async def final_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with get_db_connection() as conn:
-        conn.cursor().execute("DELETE FROM products WHERE category = ?", (context.user_data['old_cat'],))
+        # FIX: ? -> %s
+        conn.cursor().execute("DELETE FROM products WHERE category = %s", (context.user_data['old_cat'],))
+        conn.commit()
     await update.message.reply_text("🗑 O'chirildi!")
     return await admin_panel(update, context)
 
@@ -313,7 +321,8 @@ async def delete_product_choice(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['del_cat'] = category
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT name FROM products WHERE category = ?", (category,))
+        # FIX: ? -> %s
+        cursor.execute("SELECT name FROM products WHERE category = %s", (category,))
         products = cursor.fetchall()
     if not products:
         await update.message.reply_text("Bu kategoriyada tovar yo'q.")
@@ -329,7 +338,8 @@ async def delete_product_final(update: Update, context: ContextTypes.DEFAULT_TYP
     cat = context.user_data.get('del_cat')
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("DELETE FROM products WHERE name = ? AND category = ?", (p_name, cat))
+        # FIX: ? -> %s
+        cursor.execute("DELETE FROM products WHERE name = %s AND category = %s", (p_name, cat))
         conn.commit()
     await update.message.reply_text(f"✅ {p_name} o'chirildi!")
     return await admin_panel(update, context)
@@ -349,7 +359,6 @@ async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def show_category_products(update: Update, context: ContextTypes.DEFAULT_TYPE):
     category = update.message.text
-    # FIX: Agar foydalanuvchi "Orqaga" ni bossa, startga yuboramiz (buni quyida alohida handler ham qiladi, lekin ehtiyot shart)
     if category == "⬅️ Orqaga": return await start(update, context)
     
     ignore_list = ["🛍 Katalog", "📝 Ariza qoldirish", "ℹ️ Ma'lumot", "🚀 Botni ulashish", "🛠 Admin Panel", "➕ Tovar qo'shish"]
@@ -357,7 +366,8 @@ async def show_category_products(update: Update, context: ContextTypes.DEFAULT_T
     
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        cursor.execute("SELECT name, price, photo_id FROM products WHERE category = ?", (category,))
+        # FIX: ? -> %s
+        cursor.execute("SELECT name, price, photo_id FROM products WHERE category = %s", (category,))
         prods = cursor.fetchall()
         
     if not prods: return 
@@ -432,10 +442,7 @@ def main():
     app.add_handler(user_conv)
     app.add_handler(admin_conv)
     
-    # FIX: "Orqaga" tugmasi uchun MAXSUS handler. Bu Katalogdagi matn ushlagichidan oldin turishi SHART.
     app.add_handler(MessageHandler(filters.Regex("^⬅️ Orqaga$"), start))
-
-    # Eng oxirida matnni ushlaymiz (Katalogdagi tovarlar uchun)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, show_category_products))
 
     print("Bot muvaffaqiyatli ishga tushdi 🚀")
