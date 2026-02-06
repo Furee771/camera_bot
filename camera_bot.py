@@ -1,5 +1,5 @@
 import logging
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, ConversationHandler
 import psycopg2
 import os
@@ -12,21 +12,20 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 # --- ASOSIY SOZLAMALAR ---
 TOKEN = os.environ.get("API_KEY")
-ADMIN_IDS = [8503332430]  # Adminlarning Telegram IDlari
-CHANNEL_ID = -1003622395120
+ADMIN_IDS = [8503332430] 
+CHANNEL_ID = -1003622395120 
 CHANNEL_LINK = "https://t.me/cameraServiceBot1"
 
 # 2. BAZA BILAN ISHLASH (PostgreSQL / Supabase)
 def get_db_connection():
     db_url = os.environ.get('DATABASE_URL')
-    # sslmode='require' majburiy Heroku va Supabase uchun
     conn = psycopg2.connect(db_url, sslmode='require')
     return conn
 
 def init_db():
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # Postgresda AUTOINCREMENT o'rniga SERIAL ishlatiladi
+        # Postgres uchun SERIAL ishlatiladi
         cursor.execute('''CREATE TABLE IF NOT EXISTS applications 
                           (id SERIAL PRIMARY KEY, user_id BIGINT, name TEXT, phone TEXT, description TEXT)''')
         cursor.execute('''CREATE TABLE IF NOT EXISTS products 
@@ -34,13 +33,10 @@ def init_db():
         cursor.execute('''CREATE TABLE IF NOT EXISTS settings 
                           (key TEXT PRIMARY KEY, value TEXT)''')
         
-        # FIX: Postgresda INSERT OR IGNORE ishlamaydi, ON CONFLICT ishlatamiz
-        # FIX: Postgresda '?' o'rniga '%s' ishlatiladi
         info_text = "Bizning xizmatlar: Kamera o'rnatish, ta'mirlash va sozlash."
         cursor.execute("INSERT INTO settings (key, value) VALUES (%s, %s) ON CONFLICT (key) DO NOTHING", ('info_text', info_text))
         conn.commit()
 
-# Bazani ishga tushirish
 init_db()
 
 # 3. STATES (HOLATLAR)
@@ -141,9 +137,9 @@ async def get_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
     loc = context.user_data.get('app_location')
     
     with get_db_connection() as conn:
-        # FIX: ? -> %s
-        conn.cursor().execute("INSERT INTO applications (user_id, name, phone, description) VALUES (%s, %s, %s, %s)", 
-                             (update.effective_user.id, name, phone, f"{desc}\n📍 {loc}"))
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO applications (user_id, name, phone, description) VALUES (%s, %s, %s, %s)", 
+                       (update.effective_user.id, name, phone, f"{desc}\n📍 {loc}"))
         conn.commit()
         
     report = f"🔔 <b>YANGI ARIZA</b>\n👤 {name}\n📞 {phone}\n📍 {loc}\n📝 {desc}"
@@ -201,8 +197,8 @@ async def start_edit_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def save_info_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "⬅️ Orqaga": return await admin_panel(update, context)
     with get_db_connection() as conn:
-        # FIX: ? -> %s
-        conn.cursor().execute("UPDATE settings SET value = %s WHERE key = 'info_text'", (update.message.text,))
+        cursor = conn.cursor()
+        cursor.execute("UPDATE settings SET value = %s WHERE key = 'info_text'", (update.message.text,))
         conn.commit()
     await update.message.reply_text("✅ Ma'lumot yangilandi!")
     return await admin_panel(update, context)
@@ -254,9 +250,9 @@ async def process_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     fid = update.message.photo[-1].file_id
     with get_db_connection() as conn:
-        # FIX: ? -> %s
-        conn.cursor().execute("INSERT INTO products (category, name, price, photo_id) VALUES (%s, %s, %s, %s)", 
-                             (context.user_data['p_cat'], context.user_data['p_name'], context.user_data['p_price'], fid))
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO products (category, name, price, photo_id) VALUES (%s, %s, %s, %s)", 
+                       (context.user_data['p_cat'], context.user_data['p_name'], context.user_data['p_price'], fid))
         conn.commit()
     await update.message.reply_text("✅ Tovar qo'shildi!")
     return await admin_panel(update, context)
@@ -289,16 +285,16 @@ async def start_rename_input(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def do_actual_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.text == "⬅️ Orqaga": return await prepare_rename(update, context)
     with get_db_connection() as conn:
-        # FIX: ? -> %s
-        conn.cursor().execute("UPDATE products SET category = %s WHERE category = %s", (update.message.text, context.user_data['old_cat']))
+        cursor = conn.cursor()
+        cursor.execute("UPDATE products SET category = %s WHERE category = %s", (update.message.text, context.user_data['old_cat']))
         conn.commit()
     await update.message.reply_text("✅ Yangilandi!")
     return await admin_panel(update, context)
 
 async def final_rename(update: Update, context: ContextTypes.DEFAULT_TYPE):
     with get_db_connection() as conn:
-        # FIX: ? -> %s
-        conn.cursor().execute("DELETE FROM products WHERE category = %s", (context.user_data['old_cat'],))
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM products WHERE category = %s", (context.user_data['old_cat'],))
         conn.commit()
     await update.message.reply_text("🗑 O'chirildi!")
     return await admin_panel(update, context)
@@ -321,7 +317,6 @@ async def delete_product_choice(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['del_cat'] = category
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # FIX: ? -> %s
         cursor.execute("SELECT name FROM products WHERE category = %s", (category,))
         products = cursor.fetchall()
     if not products:
@@ -338,7 +333,6 @@ async def delete_product_final(update: Update, context: ContextTypes.DEFAULT_TYP
     cat = context.user_data.get('del_cat')
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # FIX: ? -> %s
         cursor.execute("DELETE FROM products WHERE name = %s AND category = %s", (p_name, cat))
         conn.commit()
     await update.message.reply_text(f"✅ {p_name} o'chirildi!")
@@ -366,7 +360,6 @@ async def show_category_products(update: Update, context: ContextTypes.DEFAULT_T
     
     with get_db_connection() as conn:
         cursor = conn.cursor()
-        # FIX: ? -> %s
         cursor.execute("SELECT name, price, photo_id FROM products WHERE category = %s", (category,))
         prods = cursor.fetchall()
         
@@ -375,7 +368,7 @@ async def show_category_products(update: Update, context: ContextTypes.DEFAULT_T
     admin_link = await get_admin_link(context)
     
     for n, p, f in prods:
-        cap = f"<b>{n}</b>\n💰 Narxi: {p}\n\n✅ Buyurtma berish uchun, iltimos, biz bilan bog'laning yoki ariza qoldiring: {admin_link}"
+        cap = f"<b>{n}</b>\n💰 Narxi: {p}\n\n✅ Buyurtma berish uchun bog'laning: {admin_link}"
         try: await context.bot.send_photo(update.effective_chat.id, f, caption=cap, parse_mode='HTML')
         except: await update.message.reply_text(cap, parse_mode='HTML')
 
@@ -385,19 +378,7 @@ def main():
     back_f = filters.Regex("^⬅️ Orqaga$")
     cancel_f = filters.Regex("^🚫 Bekor qilish$")
 
-    # 1. FOYDALANUVCHI HANDLERI (ARIZA)
-    user_conv = ConversationHandler(
-        entry_points=[MessageHandler(filters.Regex("^📝 Ariza qoldirish$"), new_application)],
-        states={
-            NAME: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
-            PHONE: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
-            LOCATION: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.LOCATION | filters.TEXT, get_location)],
-            DESCRIPTION: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.TEXT & ~filters.COMMAND, get_description)],
-        },
-        fallbacks=[CommandHandler('start', start)]
-    )
-
-    # 2. ADMIN HANDLERI
+    # ADMIN HANDLER (Биринчи навбатда текширилади)
     admin_conv = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex("^🛠 Admin Panel$"), admin_panel)],
         states={
@@ -410,38 +391,47 @@ def main():
                 MessageHandler(filters.Regex("^📝 Ma'lumotni tahrirlash$"), start_edit_info),
                 MessageHandler(back_f, start)
             ],
-            # Qo'shish
-            SELECT_CAT_FOR_ADD: [MessageHandler(filters.TEXT, get_cat_for_add)],
-            NEW_CAT_NAME: [MessageHandler(filters.TEXT, get_new_cat_name)],
-            INPUT_NAME: [MessageHandler(filters.TEXT, process_name)],
-            INPUT_PRICE: [MessageHandler(filters.TEXT, process_price)],
-            INPUT_PHOTO: [MessageHandler(filters.PHOTO, process_photo)],
-            # Kategoriya Tahrirlash
-            EDIT_CATEGORY: [MessageHandler(filters.TEXT, get_new_name)],
+            SELECT_CAT_FOR_ADD: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cat_for_add)],
+            NEW_CAT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_new_cat_name)],
+            INPUT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_name)],
+            INPUT_PRICE: [MessageHandler(filters.TEXT & ~filters.COMMAND, process_price)],
+            INPUT_PHOTO: [MessageHandler(filters.PHOTO, process_photo), MessageHandler(back_f, start_add_product)],
+            EDIT_CATEGORY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_new_name)],
             RENAME_CATEGORY: [
                 MessageHandler(filters.Regex("^✏️ Nomini o'zgartirish$"), start_rename_input),
                 MessageHandler(filters.Regex("^🗑 Kategoriyani o'chirish$"), final_rename),
                 MessageHandler(back_f, prepare_rename)
             ],
-            WAIT_FOR_NEW_NAME: [MessageHandler(filters.TEXT, do_actual_rename)],
-            # O'chirish
-            SELECT_PRODUCT_TO_DELETE: [MessageHandler(filters.TEXT, delete_product_choice)],
-            CONFIRM_DELETE: [MessageHandler(filters.TEXT, delete_product_final)],
-            # Info
-            EDIT_INFO_TEXT: [MessageHandler(filters.TEXT, save_info_text)],
+            WAIT_FOR_NEW_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, do_actual_rename)],
+            SELECT_PRODUCT_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_product_choice)],
+            CONFIRM_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, delete_product_final)],
+            EDIT_INFO_TEXT: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_info_text)],
         },
-        fallbacks=[CommandHandler('start', start)]
+        fallbacks=[CommandHandler('start', start), MessageHandler(back_f, start)],
+        allow_reentry=True
+    )
+
+    # USER HANDLER
+    user_conv = ConversationHandler(
+        entry_points=[MessageHandler(filters.Regex("^📝 Ariza qoldirish$"), new_application)],
+        states={
+            NAME: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.TEXT & ~filters.COMMAND, get_name)],
+            PHONE: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.TEXT & ~filters.COMMAND, get_phone)],
+            LOCATION: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.LOCATION | filters.TEXT, get_location)],
+            DESCRIPTION: [MessageHandler(cancel_f, cancel_user), MessageHandler(filters.TEXT & ~filters.COMMAND, get_description)],
+        },
+        fallbacks=[CommandHandler('start', start)],
+        allow_reentry=True
     )
 
     app.add_handler(CommandHandler('start', start))
+    app.add_handler(admin_conv)
+    app.add_handler(user_conv)
+    
     app.add_handler(MessageHandler(filters.Regex("^🛍 Katalog$"), show_catalog))
     app.add_handler(MessageHandler(filters.Regex("^ℹ️ Ma'lumot$"), info))
     app.add_handler(MessageHandler(filters.Regex("^🚀 Botni ulashish$"), share_bot))
     app.add_handler(MessageHandler(filters.Regex("^✅ Obunani tekshirish$"), check_sub_button))
-    
-    app.add_handler(user_conv)
-    app.add_handler(admin_conv)
-    
     app.add_handler(MessageHandler(filters.Regex("^⬅️ Orqaga$"), start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, show_category_products))
 
